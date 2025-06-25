@@ -6,13 +6,16 @@ use std::io::Read;
 use std::path::Path;
 use infer::Infer;
 
+// TODO: Add support for other hash types (MD5, SHA1, etc.) 
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// The path to the file to hash
     file_path: String,
 
-    /// Enable verbose logging
+    /// Enable verbose logging. Pass once for debug, twice for trace.
+    /// For example, `-v` or `--verbose` for debug, `-vv` for trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 }
@@ -25,7 +28,7 @@ struct Cli {
 fn read_text_file(path: &Path) -> std::io::Result<String> {
     let bytes = fs::read(path)?;
     if bytes.starts_with(&[0xff, 0xfe]) {
-        // UTF-16 LE BOM detected
+        // UTF-16 LE BOM detected (github ci uses UTF-16LE at the time of writing)
         let u16_slice: Vec<u16> = bytes[2..]
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
@@ -70,6 +73,9 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
         let mut skip_reason = String::new();
 
         // Always check files with hash-related extensions or patterns
+        // If there are mime types or an RFC that defines standard extensions for hash files
+        // I didn't find any, so use sketchy heuristics instead
+
         if hash_extensions.iter().any(|e| ext == *e)
             || hash_patterns.iter().any(|pat| file_name.contains(pat.to_ascii_lowercase().as_str()))
         {
@@ -85,17 +91,18 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
                     }
                 },
                 _ => {
-                    // Unknown or unsupported MIME type, save for later
+                    // Unknown or unsupported MIME type, save for later and check last
+                    // if no other matches were found before we get there
                     unknown_files.push(path.clone());
                     skip_reason = "Unknown or unsupported MIME type (will check last)".to_string();
                 }
             }
         }
         if !treat_as_text {
-            debug!("Skipping {:?} ({})", path, skip_reason);
+            debug!("➡️ Skipping {:?} ({})", path, skip_reason);
             continue;
         }
-        info!("➡️ Searching file: {:?}", path);
+        debug!("➡️ Searching file: {:?}", path);
         if let Ok(contents) = read_text_file(&path) {
             for line in contents.lines() {
                 if line
@@ -110,9 +117,9 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
             }
         }
     }
-    // Now check unknown files last
+    // Since we didn't find the hash in 'known' files types, check the unidentifiec filetypes
     for path in unknown_files {
-        info!("➡️ Searching unknown file type: {:?}", path);
+        debug!("➡️ Searching unknown file type: {:?}", path);
         if let Ok(contents) = read_text_file(&path) {
             for line in contents.lines() {
                 if line
@@ -136,18 +143,26 @@ fn main() {
 
     env_logger::Builder::new()
         .filter_level(match cli.verbose {
-            0 => log::LevelFilter::Warn,
-            1 => log::LevelFilter::Info,
-            2 => log::LevelFilter::Debug,
+            0 => log::LevelFilter::Info,
+            1 => log::LevelFilter::Debug,
             _ => log::LevelFilter::Trace,
         })
         .init();
 
     match calculate_sha256(&cli.file_path) {
         Ok(hash) => {
-            info!("{}", hash);
+            info!("⭐ File hash: {}", hash);
             match find_file_with_hash(&cli.file_path, &hash) {
-                Some(file_name) => info!("{}", file_name),
+                Some(file_name) => {
+                    let hashed_file_name = Path::new(&cli.file_path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&cli.file_path);
+                    info!(
+                        "✅ Matches {} hash found in {}",
+                        hashed_file_name, file_name
+                    );
+                }
                 None => warn!("No matching text file found."),
             }
         }
