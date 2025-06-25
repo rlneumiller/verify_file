@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Arrel Neumiller
+
 use clap::Parser;
 use digest::Digest;
 use infer::Infer;
