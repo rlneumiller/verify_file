@@ -1,18 +1,23 @@
 use clap::Parser;
+use digest::Digest;
+use infer::Infer;
 use log::{debug, info, warn};
-use sha2::{Sha256, Digest};
+use md5::Md5;
+use sha1::Sha1;
+use sha2::{Sha256, Sha512};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
-use infer::Infer;
-
-// TODO: Add support for other hash types (MD5, SHA1, etc.) 
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// The path to the file to hash
     file_path: String,
+
+    /// The hash algorithm to use
+    #[arg(short, long, default_value = "sha256")]
+    algorithm: String,
 
     /// Enable verbose logging. Pass once for debug, twice for trace.
     /// For example, `-v` or `--verbose` for debug, `-vv` for trace.
@@ -40,9 +45,11 @@ fn read_text_file(path: &Path) -> std::io::Result<String> {
     }
 }
 
-fn calculate_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error>> {
+fn calculate_hash<D: Digest>(
+    path: &str,
+    mut hasher: D,
+) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
     let mut buffer = [0u8; 4096];
     loop {
         let n = file.read(&mut buffer)?;
@@ -51,7 +58,11 @@ fn calculate_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::erro
         }
         hasher.update(&buffer[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    let result = hasher.finalize();
+    Ok(result
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect())
 }
 
 fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
@@ -149,7 +160,21 @@ fn main() {
         })
         .init();
 
-    match calculate_sha256(&cli.file_path) {
+    let hash_result = match cli.algorithm.to_lowercase().as_str() {
+        "md5" => calculate_hash(&cli.file_path, Md5::new()),
+        "sha1" => calculate_hash(&cli.file_path, Sha1::new()),
+        "sha256" => calculate_hash(&cli.file_path, Sha256::new()),
+        "sha512" => calculate_hash(&cli.file_path, Sha512::new()),
+        _ => {
+            warn!(
+                "Unsupported hash algorithm: {}. Defaulting to SHA256.",
+                cli.algorithm
+            );
+            calculate_hash(&cli.file_path, Sha256::new())
+        }
+    };
+
+    match hash_result {
         Ok(hash) => {
             info!("⭐ File hash: {}", hash);
             match find_file_with_hash(&cli.file_path, &hash) {
@@ -163,7 +188,7 @@ fn main() {
                         hashed_file_name, file_name
                     );
                 }
-                None => warn!("No matching text file found."),
+                None => warn!("❌ Failed to find a matching hash. Unable to verify the file."),
             }
         }
         Err(e) => warn!("Error calculating hash: {}", e),
