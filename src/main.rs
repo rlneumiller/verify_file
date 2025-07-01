@@ -1,5 +1,3 @@
-// Copyright (c) 2025 Arrel Neumiller
-
 use clap::Parser;
 use digest::Digest;
 use infer::Infer;
@@ -33,18 +31,7 @@ struct Cli {
 /// Usage: cargo run <file_path>
 /// Example: cargo run example.exe
 fn read_text_file(path: &Path) -> std::io::Result<String> {
-    let bytes = fs::read(path)?;
-    if bytes.starts_with(&[0xff, 0xfe]) {
-        // UTF-16 LE BOM detected (github ci uses UTF-16LE at the time of writing)
-        let u16_slice: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        Ok(String::from_utf16_lossy(&u16_slice))
-    } else {
-        // Fallback to UTF-8
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
+    fs::read_to_string(path)
 }
 
 fn calculate_hash<D: Digest>(
@@ -69,7 +56,12 @@ fn calculate_hash<D: Digest>(
 
 fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
     let infer = Infer::new();
-    let directory_of_hashed_file = Path::new(file_path).parent()?;
+    let parent_path = Path::new(file_path).parent()?;
+    let directory_of_hashed_file = if parent_path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent_path
+    };
     let hash_extensions = [
         "md5", "sha1", "sha256", "sha512", "sum", "hash", "checksum", "txt"
     ];
@@ -78,8 +70,26 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
     ];
     let mut unknown_files = Vec::new();
 
-    for entry in fs::read_dir(directory_of_hashed_file).ok()? {
-        let path = entry.ok()?.path();
+    let dir_reader = match fs::read_dir(directory_of_hashed_file) {
+        Ok(reader) => reader,
+        Err(e) => {
+            warn!(
+                "Failed to read directory '{:?}': {}",
+                directory_of_hashed_file, e
+            );
+            return None;
+        }
+    };
+
+    for entry_result in dir_reader {
+        let path = match entry_result {
+            Ok(entry) => entry.path(),
+            Err(e) => {
+                warn!("Failed to read directory entry: {}", e);
+                continue;
+            }
+        };
+        println!("➡️ Checking file: {:?}", path);
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         let mut treat_as_text = false;
@@ -120,7 +130,7 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
             for line in contents.lines() {
                 if line
                     .split_whitespace()
-                    .any(|word| word.eq_ignore_ascii_case(hash))
+                    .any(|word| word.trim().eq_ignore_ascii_case(hash))
                 {
                     return path
                         .file_name()
@@ -137,7 +147,7 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
             for line in contents.lines() {
                 if line
                     .split_whitespace()
-                    .any(|word| word.eq_ignore_ascii_case(hash))
+                    .any(|word| word.trim().eq_ignore_ascii_case(hash))
                 {
                     return path
                         .file_name()
