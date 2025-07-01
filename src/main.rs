@@ -82,6 +82,7 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
     };
 
     for entry_result in dir_reader {
+        debug!("➡️ Found directory entry: {:?}", entry_result);
         let path = match entry_result {
             Ok(entry) => entry.path(),
             Err(e) => {
@@ -89,7 +90,7 @@ fn find_file_with_hash(file_path: &str, hash: &str) -> Option<String> {
                 continue;
             }
         };
-        println!("➡️ Checking file: {:?}", path);
+        debug!("➡️ Checking file: {:?}", path);
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         let mut treat_as_text = false;
